@@ -1,71 +1,14 @@
 #include "gifdec.h"
-#include <stdio.h>
 #include <stdlib.h>
-#include <assert.h>
 
 
-#define CHUNK_SIZE 1024
+#define SIGNATURE_SIZE 3
+#define VERSION_SIZE   3
+#define HEADER_SIZE (SIGNATURE_SIZE + VERSION_SIZE)
+
 
 #define LSD_HAS_GCT(LsdFields)  ((LsdFields) & 0x80)
-
-//
-// Raise 2 to [the value of the field + 1] (hence the 2)
-//
 #define LSD_GCT_SIZE(LsdFields) (2 << (((LsdFields) & 7)))
-
-
-typedef enum GD_SOURCE_MODE
-{
-	GD_FROM_STREAM,
-	GD_FROM_MEMORY
-} GD_SOURCE_MODE;
-
-/*!
- * Holds the decoding context of the GIF, this structure allows reading
- * from a stream, (a file) or from memory (an already existing buffer)
- */
-typedef struct GD_DECODE_CONTEXT
-{
-	//
-	// File descriptor and buffer used as a chunk when reading from a stream (ie: a file)
-	//
-	FILE*  StreamFd;
-	BYTE   StreamChunk[CHUNK_SIZE];
-
-	//
-	// Pointer and size of the buffer used to decode from memory
-	//
-	BYTE*  MemoryBuffer;
-	size_t MemoryBufferSize;
-
-	//
-	// Indicates whether the decoder use a stream or a buffer as a source input
-	//
-	GD_SOURCE_MODE SourceMode;
-
-	//
-	// Iterators on the source input, depending on the mode they can point to:
-	//		- StreamChunk  for SourceMode == GD_FROM_STREAM
-	//		- MemoryBuffer for SourceMode == GD_FROM_MEMORY
-	//
-	BYTE* SourceBeg;
-	BYTE* SourceEnd;
-
-	//
-	// Indicates whether the source has reached EOF (buffer entirely read for memory mode)
-	//
-	GD_BOOL SourceEOF;
-
-	//
-	// Current position of the decoder in the data stream, useful for errors
-	//
-	size_t DataStreamOffset;
-
-} GD_DECODE_CONTEXT;
-
-
-static void
-GD_DecoderLoadChunk(GD_DECODE_CONTEXT* DecodeCtx);
 
 
 static GD_ERR
@@ -388,14 +331,14 @@ GD_DecodeInternal(GD_DECODE_CONTEXT* DecodeCtx, GD_ERR* ErrorCode)
 				break;
 
 			case TRAILER:
-				break;
+				return Gif;
 
 			default:
-				break;
+				free(Gif);
+				*ErrorCode = GD_UNEXPECTED_DATA;
+				return NULL;
 		}
 	}
-
-	return Gif;
 }
 
 GD_GIF_HANDLE
