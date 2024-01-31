@@ -98,11 +98,50 @@ void test_from_file()
 	GD_CloseGif(Gif);
 }
 
+void
+OnGraphicsExt(GD_EXT_GRAPHICS* ExData)
+{
+	puts("Graphics extension routine called");
+
+	if (ExData)
+	{
+		printf("--------------------------\n");
+		printf("PackedFields: %d\n", ExData->PackedFields);
+		printf("Delay Time:   %d\n", ExData->DelayTime);
+		printf("Transparent:  %d\n", ExData->TransparentColorIndex);
+	}
+}
+
+void
+OnAppExt(GD_EXT_APPLICATION* ExData)
+{
+	puts("Application extension routine called");
+
+	if (ExData)
+	{
+		printf("--------------------------\n");
+		printf("App Id:   %8s\n", ExData->AppId);
+		printf("App Auth: %3s\n", ExData->AppAuth);
+	}
+}
 
 int main(int argc, const char** argv)
 {
-	test_from_file();
-	// test_from_memory();
+	GD_ERR ErrCode;
+	size_t ErrorBytePos;
+
+	GD_RegisterExRoutine(GD_APPLICATION, OnAppExt);
+	GD_RegisterExRoutine(GD_GRAPHICS, OnGraphicsExt);
+
+	GD_GIF_HANDLE Gif = GD_OpenGif("testgif89a.gif", &ErrCode, &ErrorBytePos);
+
+	if (ErrCode != GD_OK)
+	{
+		fprintf(stderr, "[GD]: Decoding error code=%d, pos=%zu\n", ErrCode, ErrorBytePos);
+		return EXIT_FAILURE;
+	}
+
+	GD_CloseGif(Gif);
 
 	return EXIT_SUCCESS;
 }

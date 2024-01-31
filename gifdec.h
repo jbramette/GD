@@ -57,25 +57,25 @@ typedef enum GD_ERR
 
 #define SUB_BLOCK_MAX_SIZE 255
 
-typedef struct GD_DataSubBlock
+typedef struct GD_DataBlock
 {
-	struct GD_DataSubBlock* BLink;
-	struct GD_DataSubBlock* FLink;
+	struct GD_DataBlock* BLink;
+	struct GD_DataBlock* FLink;
 
-	const BYTE Data[SUB_BLOCK_MAX_SIZE];
+	BYTE Data[SUB_BLOCK_MAX_SIZE];
 	BYTE EffectiveSize;
 
-} GD_DataSubBlock;
+} GD_DataBlock;
 
 
-typedef struct GD_SubBlockList
+typedef struct GD_DataBlockList
 {
-	GD_DataSubBlock* Head;
-	GD_DataSubBlock* Tail;
+	GD_DataBlock* Head;
+	GD_DataBlock* Tail;
 
 	size_t BlockCount;
 
-} GD_SubBlockList;
+} GD_DataBlockList;
 
 
 typedef struct GD_EXT_GRAPHICS
@@ -88,7 +88,7 @@ typedef struct GD_EXT_GRAPHICS
 
 typedef struct GD_EXT_COMMENT
 {
-	GD_DataSubBlock Data;
+	GD_DataBlockList Blocks;
 } GD_EXT_COMMENT;
 
 
@@ -103,7 +103,7 @@ typedef struct GD_EXT_PLAINTEXT
 	BYTE FgColorIndex;
 	BYTE BgColorIndex;
 
-	GD_DataSubBlock Data;
+	GD_DataBlockList Blocks;
 
 } GD_EXT_PLAINTEXT;
 
@@ -113,7 +113,7 @@ typedef struct GD_EXT_APPLICATION
 	BYTE AppId[8];
 	BYTE AppAuth[3];
 
-	GD_DataSubBlock Data;
+	GD_DataBlockList Blocks;
 
 } GD_EXT_APPLICATION;
 
@@ -122,20 +122,28 @@ typedef enum GD_EXTENSION_TYPE
 {
 	GD_APPLICATION = 0,
 	GD_PLAINTEXT   = 1,
-	GD_COMMENT     = 2
+	GD_GRAPHICS    = 2,
+	GD_COMMENT     = 3
 
 } GD_EXTENSION_TYPE;
 
 
-typedef void(*GD_EXT_ROUTINE_APPLICATION)(GD_EXT_APPLICATION* Extension);
-typedef void(*GD_EXT_ROUTINE_PLAINTEXT)(GD_EXT_PLAINTEXT* Extension);
-typedef void(*GD_EXT_ROUTINE_COMMENT)(GD_EXT_COMMENT* Extension);
+typedef void(*GD_EXT_ROUTINE_APPLICATION)(const GD_EXT_APPLICATION* Extension);
+typedef void(*GD_EXT_ROUTINE_PLAINTEXT)(const GD_EXT_PLAINTEXT* Extension);
+typedef void(*GD_EXT_ROUTINE_GRAPHICS)(const GD_EXT_GRAPHICS* Extension);
+typedef void(*GD_EXT_ROUTINE_COMMENT)(const GD_EXT_COMMENT* Extension);
 
 #define MAX_REGISTERED_ROUTINES 4
 
-GD_EXT_ROUTINE_APPLICATION AppExtRoutines[MAX_REGISTERED_ROUTINES];
-GD_EXT_ROUTINE_APPLICATION CommentExtRoutines[MAX_REGISTERED_ROUTINES];
-GD_EXT_ROUTINE_APPLICATION PlaintextExtRoutines[MAX_REGISTERED_ROUTINES];
+typedef struct GD_EXT_ROUTINES {
+	void* Routines[MAX_REGISTERED_ROUTINES];
+	size_t RegisteredCount;
+} GD_EXT_ROUTINES;
+
+static GD_EXT_ROUTINES ApplicationExtRoutines;
+static GD_EXT_ROUTINES PlaintextExtRoutines;
+static GD_EXT_ROUTINES GraphicsExtRoutines;
+static GD_EXT_ROUTINES CommentExtRoutines;
 
 
 
@@ -255,25 +263,22 @@ GD_ImageBuffer(GD_GIF_HANDLE Gif, size_t ImageIndex, BYTE** Buffer, size_t* Buff
 /// \param UserRoutine
 /// \return
 GD_ERR
-GD_RegisterRoutine(GD_EXTENSION_TYPE RoutineType, void* UserRoutine);
+GD_RegisterExRoutine(GD_EXTENSION_TYPE RoutineType, void* UserRoutine);
 
 /// \brief Clear all routines for a certain extension type
 /// \param RoutineType
-/// \return
-GD_ERR
-GD_ClearRoutines(GD_EXTENSION_TYPE RoutineType);
+void
+GD_ClearExRoutines(GD_EXTENSION_TYPE RoutineType);
 
-/// \brief Clear all routines registered for every extension type
-/// \return
-GD_ERR
-GD_ClearAllRoutines();
+/// \brief Clear all routines RegisteredCount for every extension type
+void
+GGD_ClearAllExRoutines();
 
 /// \brief Unregister a single routine by address
 /// \param RoutineType
 /// \param UserRoutine
-/// \return
-GD_ERR
-GD_UnregisterRoutine(GD_EXTENSION_TYPE RoutineType, void* UserRoutine);
+void
+GD_UnregisterExRoutine(GD_EXTENSION_TYPE RoutineType, void* UserRoutine);
 
 
 
@@ -410,7 +415,23 @@ GD_ReadGlobalColorTable(GD_DECODE_CONTEXT* DecodeCtx, GD_GLOBAL_COLOR_TABLE* Tab
 /// \brief Ignore gif data sub-blocks
 /// \param DecodeCtx
 static void
-GD_IgnoreBlocks(GD_DECODE_CONTEXT* DecodeCtx);
+GD_IgnoreSubDataBlocks(GD_DECODE_CONTEXT* DecodeCtx);
+
+static GD_ERR
+GD_CreateBlock(GD_DECODE_CONTEXT* DecodeCtx, BYTE BSize, GD_DataBlock** OutputBlock);
+
+/// \brief Create a doubly linked list of sub data blocks
+/// \param DecodeCtx
+/// \param List
+/// \return
+static GD_ERR
+GD_BuildBlockList(GD_DECODE_CONTEXT* DecodeCtx, GD_DataBlockList* List);
+
+/// \brief Add a new block at the end of the list
+/// \param List
+/// \param Block
+static void
+GD_BlockListAppend(GD_DataBlockList* List, GD_DataBlock* Block);
 
 /// \brief
 /// \param DecodeCtx
@@ -441,7 +462,7 @@ GD_ReadExtApplication(GD_DECODE_CONTEXT* DecodeCtx);
 /// \param Gif
 /// \return
 static GD_ERR
-GD_ReadExtension(GD_DECODE_CONTEXT* DecodeCtx, GD_GIF_HANDLE Gif);
+GD_ReadExtension(GD_DECODE_CONTEXT* DecodeCtx);
 
 /// \brief The main GIF decoding routine
 /// \param DecodeCtx
@@ -449,6 +470,7 @@ GD_ReadExtension(GD_DECODE_CONTEXT* DecodeCtx, GD_GIF_HANDLE Gif);
 /// \return
 static GD_GIF_HANDLE
 GD_DecodeInternal(GD_DECODE_CONTEXT* DecodeCtx, GD_ERR* ErrorCode);
+
 
 
 #endif //GIFDEC_GIFDEC_H

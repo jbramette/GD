@@ -208,9 +208,11 @@ GD_ReadGlobalColorTable(GD_DECODE_CONTEXT* DecodeCtx, GD_GLOBAL_COLOR_TABLE* Tab
 }
 
 static void
-GD_IgnoreBlocks(GD_DECODE_CONTEXT* DecodeCtx)
+GD_IgnoreSubDataBlocks(GD_DECODE_CONTEXT* DecodeCtx)
 {
-	for (BYTE BSize = GD_ReadByte(DecodeCtx); BSize != 0; BSize = GD_ReadByte(DecodeCtx))
+	for (BYTE BSize = GD_ReadByte(DecodeCtx);
+	          BSize != 0;
+			  BSize = GD_ReadByte(DecodeCtx))
 	{
 		if (GD_DecoderAdvance(DecodeCtx, BSize) != GD_OK)
 			return;
@@ -218,9 +220,114 @@ GD_IgnoreBlocks(GD_DECODE_CONTEXT* DecodeCtx)
 }
 
 static GD_ERR
+GD_CreateBlock(GD_DECODE_CONTEXT* DecodeCtx, BYTE BSize, GD_DataBlock** OutputBlock)
+{
+	GD_DataBlock* Block = malloc(sizeof(GD_DataBlock));
+
+	if (!Block)
+		return GD_NOMEM;
+
+	if (GD_ReadBytes(DecodeCtx, Block->Data, BSize) != BSize)
+	{
+		free(Block);
+		return GD_NOT_ENOUGH_DATA;
+	}
+
+	Block->EffectiveSize = BSize;
+	*OutputBlock = Block;
+
+	return GD_OK;
+}
+
+static GD_ERR
+GD_BuildBlockList(GD_DECODE_CONTEXT* DecodeCtx, GD_DataBlockList* List)
+{
+	List->Head = NULL;
+	List->Tail = NULL;
+	List->BlockCount = 0;
+
+	for (BYTE BSize = GD_ReadByte(DecodeCtx);
+	          BSize != 0;
+			  BSize = GD_ReadByte(DecodeCtx))
+	{
+		GD_DataBlock* Block;
+
+		const GD_ERR ErrCode = GD_CreateBlock(DecodeCtx, BSize, &Block);
+
+		if (ErrCode != GD_OK)
+			return ErrCode;
+
+		GD_BlockListAppend(List, Block);
+	}
+
+	return GD_OK;
+}
+
+static void
+GD_BlockListAppend(GD_DataBlockList* List, GD_DataBlock* Block)
+{
+	if (!List->BlockCount)
+	{
+		Block->BLink = NULL;
+		Block->FLink = NULL;
+
+		List->Head = Block;
+		List->Tail = Block;
+	}
+	else
+	{
+		Block->FLink = NULL;
+		Block->BLink = List->Tail;
+		List->Tail->FLink = Block;
+		List->Tail = Block;
+	}
+
+	++List->BlockCount;
+}
+
+static GD_ERR
+GD_ReadExtApplication(GD_DECODE_CONTEXT* DecodeCtx)
+{
+	//
+	// Just ignore the extension if there is no callback routine
+	//
+	if (!ApplicationExtRoutines.RegisteredCount)
+	{
+		GD_IgnoreSubDataBlocks(DecodeCtx);
+		return GD_OK;
+	}
+
+	GD_EXT_APPLICATION ExData;
+
+	// Consume useless size byte
+	GD_ReadByte(DecodeCtx);
+
+	GD_ReadBytes(DecodeCtx, ExData.AppId, sizeof(ExData.AppId));
+	GD_ReadBytes(DecodeCtx, ExData.AppAuth, sizeof(ExData.AppAuth));
+
+	const GD_ERR ErrCode = GD_BuildBlockList(DecodeCtx, &ExData.Blocks);
+
+	if (ErrCode != GD_OK)
+		return ErrCode;
+
+	//
+	// Call registered callback routines
+	//
+	for (size_t i = 0; i < ApplicationExtRoutines.RegisteredCount; ++i)
+	{
+		if (ApplicationExtRoutines.Routines[i] != NULL)
+			((GD_EXT_ROUTINE_APPLICATION)ApplicationExtRoutines.Routines[i])(&ExData);
+	}
+
+	// TODO: Free list
+
+	return GD_OK;
+}
+
+static GD_ERR
 GD_ReadExtPlainText(GD_DECODE_CONTEXT* DecodeCtx)
 {
-	GD_IgnoreBlocks(DecodeCtx);
+	GD_IgnoreSubDataBlocks(DecodeCtx);
 
 	return GD_OK;
 }
@@ -228,7 +335,17 @@ GD_ReadExtPlainText(GD_DECODE_CONTEXT* DecodeCtx)
 static GD_ERR
 GD_ReadExtGraphics(GD_DECODE_CONTEXT* DecodeCtx)
 {
-	GD_IgnoreBlocks(DecodeCtx);
+	if (!GraphicsExtRoutines.RegisteredCount)
+	{
+		GD_IgnoreSubDataBlocks(DecodeCtx);
+		return GD_OK;
+	}
+
+	for (size_t i = 0; i < GraphicsExtRoutines.RegisteredCount; ++i)
+	{
+		if (GraphicsExtRoutines.Routines[i] != NULL)
+			((GD_EXT_ROUTINE_GRAPHICS)GraphicsExtRoutines.Routines[i])(NULL);
+	}
 
 	return GD_OK;
 }
@@ -236,34 +353,108 @@ GD_ReadExtGraphics(GD_DECODE_CONTEXT* DecodeCtx)
 static GD_ERR
 GD_ReadExtComment(GD_DECODE_CONTEXT* DecodeCtx)
 {
-	GD_IgnoreBlocks(DecodeCtx);
+	GD_IgnoreSubDataBlocks(DecodeCtx);
 
 	return GD_OK;
 }
 
 static GD_ERR
-GD_ReadExtApplication(GD_DECODE_CONTEXT* DecodeCtx)
+GD_ReadExtension(GD_DECODE_CONTEXT* DecodeCtx)
 {
-	GD_IgnoreBlocks(DecodeCtx);
-
-	return GD_OK;
-}
-
-static GD_ERR
-GD_ReadExtension(GD_DECODE_CONTEXT* DecodeCtx, GD_GIF_HANDLE Gif)
-{
-	// TODO: Extension Processing
-	//       Let the user register callback routines for extensions
-	//       if no routines are provided, just skip the block
-	//
 	switch (GD_ReadByte(DecodeCtx))
 	{
+		case EXT_LABEL_APPLICATION: return GD_ReadExtApplication(DecodeCtx);
 		case EXT_LABEL_PLAINTEXT: return GD_ReadExtPlainText(DecodeCtx);
 		case EXT_LABEL_GRAPHICS: return GD_ReadExtGraphics(DecodeCtx);
 		case EXT_LABEL_COMMENT: return GD_ReadExtComment(DecodeCtx);
-		case EXT_LABEL_APPLICATION: return GD_ReadExtApplication(DecodeCtx);
 
 		default: return GD_UNEXPECTED_DATA;
+	}
+}
+
+GD_ERR
+GD_RegisterExRoutine(GD_EXTENSION_TYPE RoutineType, void* UserRoutine)
+{
+	GD_EXT_ROUTINES* Routines = NULL;
+
+	switch (RoutineType)
+	{
+		case GD_APPLICATION: Routines = &ApplicationExtRoutines; break;
+		case GD_GRAPHICS:    Routines = &GraphicsExtRoutines;    break;
+		case GD_PLAINTEXT:   Routines = &PlaintextExtRoutines;   break;
+		case GD_COMMENT:     Routines = &CommentExtRoutines;     break;
+
+		default:
+			return GD_UNEXPECTED_DATA;
+	}
+
+	if (Routines->RegisteredCount >= MAX_REGISTERED_ROUTINES)
+		return GD_MAX_REGISTERED_ROUTINE;
+
+	Routines->Routines[Routines->RegisteredCount++] = UserRoutine;
+
+	return GD_OK;
+}
+
+void
+GD_ClearExRoutines(GD_EXTENSION_TYPE RoutineType)
+{
+	GD_EXT_ROUTINES* Routines = NULL;
+
+	switch (RoutineType)
+	{
+		case GD_APPLICATION: Routines = &ApplicationExtRoutines; break;
+		case GD_GRAPHICS:    Routines = &GraphicsExtRoutines;    break;
+		case GD_PLAINTEXT:   Routines = &PlaintextExtRoutines;   break;
+		case GD_COMMENT:     Routines = &CommentExtRoutines;     break;
+
+		default: return;
+	}
+
+	for (size_t i = 0; i < Routines->RegisteredCount; ++i)
+		Routines->Routines[i] = NULL;
+
+	Routines->RegisteredCount = 0;
+}
+
+void
+GGD_ClearAllExRoutines()
+{
+	GD_ClearExRoutines(GD_APPLICATION);
+	GD_ClearExRoutines(GD_GRAPHICS);
+	GD_ClearExRoutines(GD_PLAINTEXT);
+	GD_ClearExRoutines(GD_COMMENT);
+}
+
+void
+GD_UnregisterExRoutine(GD_EXTENSION_TYPE RoutineType, void* UserRoutine)
+{
+	GD_EXT_ROUTINES* Routines = NULL;
+
+	switch (RoutineType)
+	{
+		case GD_APPLICATION: Routines = &ApplicationExtRoutines; break;
+		case GD_GRAPHICS:    Routines = &GraphicsExtRoutines;    break;
+		case GD_PLAINTEXT:   Routines = &PlaintextExtRoutines;   break;
+		case GD_COMMENT:     Routines = &CommentExtRoutines;     break;
+
+		default:
+			return;
+	}
+
+	//
+	// Find and shift
+	//
+	for (size_t i = 0; i < Routines->RegisteredCount; ++i)
+	{
+		if (Routines->Routines[i] == UserRoutine)
+		{
+			for (size_t j = i; j < Routines->RegisteredCount - 1; ++j)
+				Routines->Routines[j] = Routines->Routines[j + 1];
+
+			--Routines->RegisteredCount;
+			break;
+		}
 	}
 }
 
@@ -324,7 +515,7 @@ GD_DecodeInternal(GD_DECODE_CONTEXT* DecodeCtx, GD_ERR* ErrorCode)
 		switch (b)
 		{
 			case BLOCK_INTRODUCER_EXT:
-				GD_ReadExtension(DecodeCtx, Gif);
+				GD_ReadExtension(DecodeCtx);
 				break;
 
 			case BLOCK_INTRODUCER_IMG:
