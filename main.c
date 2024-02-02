@@ -99,17 +99,45 @@ void test_from_file()
 }
 
 void
+DumpDataBlocks(GD_DataBlockList* Blocks)
+{
+	size_t BlockCount = Blocks->BlockCount;
+
+	printf("Data Blocks (%zu):\n", BlockCount);
+
+	GD_DataBlock* Current = Blocks->Head;
+
+	for (size_t i = 0; i < BlockCount; ++i)
+	{
+		printf("---- Block #%zu\n", i);
+
+		for (size_t j = 0; j < Current->EffectiveSize; ++j)
+		{
+			printf("%02X ", Current->Data[j]);
+
+			if ((j + 1) % 16 == 0)
+				printf("\n");
+		}
+
+		Current = Current->FLink;
+	}
+
+	printf("\n");
+}
+
+void
 OnGraphicsExt(GD_EXT_GRAPHICS* ExData)
 {
 	puts("Graphics extension routine called");
 
-	if (ExData)
-	{
-		printf("--------------------------\n");
-		printf("PackedFields: %d\n", ExData->PackedFields);
-		printf("Delay Time:   %d\n", ExData->DelayTime);
-		printf("Transparent:  %d\n", ExData->TransparentColorIndex);
-	}
+	if (!ExData)
+		return;
+
+	printf("--------------------------\n");
+	printf("| PackedFields: %d\n", ExData->PackedFields);
+	printf("| Delay Time:   %d\n", ExData->DelayTime);
+	printf("| Transparent:  %d\n", ExData->TransparentColorIndex);
+	printf("--------------------------\n");
 }
 
 void
@@ -117,12 +145,46 @@ OnAppExt(GD_EXT_APPLICATION* ExData)
 {
 	puts("Application extension routine called");
 
+	if (!ExData)
+		return;
+
+	printf("--------------------------\n");
+	printf("| App Id:   %.8s\n", ExData->AppId);
+	printf("| App Auth: %.3s\n", ExData->AppAuth);
+	printf("--------------------------\n");
+
+	DumpDataBlocks(&ExData->Blocks);
+}
+
+void
+OnCommentExt(GD_EXT_COMMENT* ExData)
+{
+	puts("Comment extension routine called");
+
 	if (ExData)
-	{
-		printf("--------------------------\n");
-		printf("App Id:   %8s\n", ExData->AppId);
-		printf("App Auth: %3s\n", ExData->AppAuth);
-	}
+		DumpDataBlocks(&ExData->Blocks);
+}
+
+void
+OnPlaintextExt(GD_EXT_PLAINTEXT* ExData)
+{
+	puts("Plaintext extension routine called");
+
+	if (!ExData)
+		return;
+
+	printf("---------------------------------------\n");
+	printf("| Text Grid Position Left:     %u\n", ExData->GridPositionLeft);
+	printf("| Text Grid Position Top:      %u\n", ExData->GridPositionTop);
+	printf("| Text Grid Width:             %u\n", ExData->GridWidth);
+	printf("| Text Grid Height:            %u\n", ExData->GridHeight);
+	printf("| Character Cell Width:        %u\n", ExData->CharCellWidth);
+	printf("| Character Cell Height:       %u\n", ExData->CharCellHeight);
+	printf("| Text Foreground Color Index: %u\n", ExData->FgColorIndex);
+	printf("| Text Background Color Index: %u\n", ExData->BgColorIndex);
+	printf("---------------------------------------\n");
+
+	DumpDataBlocks(&ExData->Blocks);
 }
 
 int main(int argc, const char** argv)
@@ -132,6 +194,8 @@ int main(int argc, const char** argv)
 
 	GD_RegisterExRoutine(GD_APPLICATION, OnAppExt);
 	GD_RegisterExRoutine(GD_GRAPHICS, OnGraphicsExt);
+	GD_RegisterExRoutine(GD_COMMENT, OnCommentExt);
+	GD_RegisterExRoutine(GD_PLAINTEXT, OnPlaintextExt);
 
 	GD_GIF_HANDLE Gif = GD_OpenGif("testgif89a.gif", &ErrCode, &ErrorBytePos);
 

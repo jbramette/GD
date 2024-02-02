@@ -167,6 +167,16 @@ typedef struct GD_LOGICAL_SCREEN_DESCRIPTOR
 } GD_LOGICAL_SCREEN_DESCRIPTOR;
 
 
+typedef struct GD_IMAGE_DESCRIPTOR
+{
+	WORD PositionLeft;
+	WORD PositionTop;
+	WORD Width;
+	WORD Height;
+	BYTE PackedFields;
+} GD_IMAGE_DESCRIPTOR;
+
+
 typedef struct GD_GIF_COLOR
 {
 	BYTE r;
@@ -179,7 +189,7 @@ typedef struct GD_GLOBAL_COLOR_TABLE
 {
 	GD_GIF_COLOR Internal[GCT_MAX_SIZE];
 	size_t Count;
-} GD_GLOBAL_COLOR_TABLE;
+} GD_COLOR_TABLE;
 
 
 
@@ -192,7 +202,7 @@ typedef struct GD_GIF
 {
 	GD_GIF_VERSION Version;
 	GD_LOGICAL_SCREEN_DESCRIPTOR ScreenDesc;
-	GD_GLOBAL_COLOR_TABLE GlobalColorTable;
+	GD_COLOR_TABLE GlobalColorTable;
 
 } GD_GIF, *GD_GIF_HANDLE;
 
@@ -410,7 +420,7 @@ GD_ReadScreenDescriptor(GD_DECODE_CONTEXT* DecodeCtx, GD_LOGICAL_SCREEN_DESCRIPT
 /// \param ScrDescriptorFields
 /// \return
 static GD_ERR
-GD_ReadGlobalColorTable(GD_DECODE_CONTEXT* DecodeCtx, GD_GLOBAL_COLOR_TABLE* Table, BYTE ScrDescriptorFields);
+GD_ReadColorTable(GD_DECODE_CONTEXT* DecodeCtx, GD_COLOR_TABLE* Table, BYTE ScrDescriptorFields);
 
 /// \brief Ignore gif data sub-blocks
 /// \param DecodeCtx
@@ -425,7 +435,12 @@ GD_CreateBlock(GD_DECODE_CONTEXT* DecodeCtx, BYTE BSize, GD_DataBlock** OutputBl
 /// \param List
 /// \return
 static GD_ERR
-GD_BuildBlockList(GD_DECODE_CONTEXT* DecodeCtx, GD_DataBlockList* List);
+GD_BlockListBuild(GD_DECODE_CONTEXT* DecodeCtx, GD_DataBlockList* List);
+
+/// \brief De-allocates a block list allocated by \ref GD_BlockListBuild
+/// \param List
+static void
+GD_BlockListDestroy(GD_DataBlockList* List);
 
 /// \brief Add a new block at the end of the list
 /// \param List
@@ -463,6 +478,12 @@ GD_ReadExtApplication(GD_DECODE_CONTEXT* DecodeCtx);
 /// \return
 static GD_ERR
 GD_ReadExtension(GD_DECODE_CONTEXT* DecodeCtx);
+
+/// \brief
+/// \param DecodeCtx
+/// \return
+static GD_ERR
+GD_ReadImage(GD_DECODE_CONTEXT* DecodeCtx);
 
 /// \brief The main GIF decoding routine
 /// \param DecodeCtx

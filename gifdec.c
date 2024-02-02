@@ -7,8 +7,8 @@
 #define HEADER_SIZE (SIGNATURE_SIZE + VERSION_SIZE)
 
 
-#define LSD_HAS_GCT(LsdFields)  ((LsdFields) & 0x80)
-#define LSD_GCT_SIZE(LsdFields) (2 << (((LsdFields) & 7)))
+#define DESCRIPTOR_TABLE_PRESENT(DescriptorFields) ((DescriptorFields) & 0x80)
+#define DESCRIPTOR_TABLE_SIZE(DescriptorFields)    (2 << ((DescriptorFields) && 7))
 
 
 static GD_ERR
@@ -193,9 +193,9 @@ GD_ReadScreenDescriptor(GD_DECODE_CONTEXT* DecodeCtx, GD_LOGICAL_SCREEN_DESCRIPT
 }
 
 static GD_ERR
-GD_ReadGlobalColorTable(GD_DECODE_CONTEXT* DecodeCtx, GD_GLOBAL_COLOR_TABLE* Table, BYTE ScrDescriptorFields)
+GD_ReadColorTable(GD_DECODE_CONTEXT* DecodeCtx, GD_COLOR_TABLE* Table, BYTE ScrDescriptorFields)
 {
-	Table->Count = LSD_GCT_SIZE(ScrDescriptorFields);
+	Table->Count = DESCRIPTOR_TABLE_SIZE(ScrDescriptorFields);
 
 	for (size_t i = 0; i < Table->Count; ++i)
 	{
@@ -240,8 +240,11 @@ GD_CreateBlock(GD_DECODE_CONTEXT* DecodeCtx, BYTE BSize, GD_DataBlock** OutputBl
 }
 
 static GD_ERR
-GD_BuildBlockList(GD_DECODE_CONTEXT* DecodeCtx, GD_DataBlockList* List)
+GD_BlockListBuild(GD_DECODE_CONTEXT* DecodeCtx, GD_DataBlockList* List)
 {
+	if (!DecodeCtx || !List)
+		return GD_UNEXPECTED_DATA;
+
 	List->Head = NULL;
 	List->Tail = NULL;
 	List->BlockCount = 0;
@@ -261,6 +264,23 @@ GD_BuildBlockList(GD_DECODE_CONTEXT* DecodeCtx, GD_DataBlockList* List)
 	}
 
 	return GD_OK;
+}
+
+static void
+GD_BlockListDestroy(GD_DataBlockList* List)
+{
+	if (!List)
+		return;
+
+	GD_DataBlock* Next = NULL;
+	GD_DataBlock* Curr = List->Head;
+
+	while (List->BlockCount--)
+	{
+		Next = Curr->FLink;
+		free(Curr);
+		Curr = Next;
+	}
 }
 
 static void
@@ -288,11 +308,11 @@ GD_BlockListAppend(GD_DataBlockList* List, GD_DataBlock* Block)
 static GD_ERR
 GD_ReadExtApplication(GD_DECODE_CONTEXT* DecodeCtx)
 {
-	//
-	// Just ignore the extension if there is no callback routine
-	//
 	if (!ApplicationExtRoutines.RegisteredCount)
 	{
+		//
+		// Just ignore the extension if there is no callback routine
+		//
 		GD_IgnoreSubDataBlocks(DecodeCtx);
 		return GD_OK;
 	}
@@ -305,21 +325,21 @@ GD_ReadExtApplication(GD_DECODE_CONTEXT* DecodeCtx)
 	GD_ReadBytes(DecodeCtx, ExData.AppId, sizeof(ExData.AppId));
 	GD_ReadBytes(DecodeCtx, ExData.AppAuth, sizeof(ExData.AppAuth));
 
-	const GD_ERR ErrCode = GD_BuildBlockList(DecodeCtx, &ExData.Blocks);
+	const GD_ERR ErrCode = GD_BlockListBuild(DecodeCtx, &ExData.Blocks);
 
 	if (ErrCode != GD_OK)
 		return ErrCode;
 
-	//
-	// Call registered callback routines
-	//
 	for (size_t i = 0; i < ApplicationExtRoutines.RegisteredCount; ++i)
 	{
+		//
+		// Call registered callback routines
+		//
 		if (ApplicationExtRoutines.Routines[i] != NULL)
 			((GD_EXT_ROUTINE_APPLICATION)ApplicationExtRoutines.Routines[i])(&ExData);
 	}
 
-	// TODO: Free list
+	GD_BlockListDestroy(&ExData.Blocks);
 
 	return GD_OK;
 }
@@ -327,7 +347,38 @@ GD_ReadExtApplication(GD_DECODE_CONTEXT* DecodeCtx)
 static GD_ERR
 GD_ReadExtPlainText(GD_DECODE_CONTEXT* DecodeCtx)
 {
-	GD_IgnoreSubDataBlocks(DecodeCtx);
+	if (!PlaintextExtRoutines.RegisteredCount)
+	{
+		GD_IgnoreSubDataBlocks(DecodeCtx);
+		return GD_OK;
+	}
+
+	GD_EXT_PLAINTEXT ExData;
+
+	// Consume useless size byte
+	GD_ReadByte(DecodeCtx);
+
+	ExData.GridPositionLeft = GD_ReadWord(DecodeCtx);
+	ExData.GridPositionTop  = GD_ReadWord(DecodeCtx);
+	ExData.GridWidth = GD_ReadWord(DecodeCtx);
+	ExData.GridHeight = GD_ReadWord(DecodeCtx);
+	ExData.CharCellWidth = GD_ReadByte(DecodeCtx);
+	ExData.CharCellHeight = GD_ReadByte(DecodeCtx);
+	ExData.FgColorIndex = GD_ReadByte(DecodeCtx);
+	ExData.BgColorIndex = GD_ReadByte(DecodeCtx);
+
+	const GD_ERR ErrCode = GD_BlockListBuild(DecodeCtx, &ExData.Blocks);
+
+	if (ErrCode != GD_OK)
+		return ErrCode;
+
+	for (size_t i = 0; i < PlaintextExtRoutines.RegisteredCount; ++i)
+	{
+		if (PlaintextExtRoutines.Routines[i] != NULL)
+			((GD_EXT_ROUTINE_PLAINTEXT)PlaintextExtRoutines.Routines[i])(&ExData);
+	}
+
+	GD_BlockListDestroy(&ExData.Blocks);
 
 	return GD_OK;
 }
@@ -341,11 +392,23 @@ GD_ReadExtGraphics(GD_DECODE_CONTEXT* DecodeCtx)
 		return GD_OK;
 	}
 
+	GD_EXT_GRAPHICS ExData;
+
+	// Consume useless size byte
+	GD_ReadByte(DecodeCtx);
+
+	ExData.PackedFields = GD_ReadByte(DecodeCtx);
+	ExData.DelayTime = GD_ReadWord(DecodeCtx);
+	ExData.TransparentColorIndex = GD_ReadByte(DecodeCtx);
+
 	for (size_t i = 0; i < GraphicsExtRoutines.RegisteredCount; ++i)
 	{
 		if (GraphicsExtRoutines.Routines[i] != NULL)
-			((GD_EXT_ROUTINE_GRAPHICS)GraphicsExtRoutines.Routines[i])(NULL);
+			((GD_EXT_ROUTINE_GRAPHICS)GraphicsExtRoutines.Routines[i])(&ExData);
 	}
+
+	// Consume block terminator
+	GD_ReadByte(DecodeCtx);
 
 	return GD_OK;
 }
@@ -353,7 +416,26 @@ GD_ReadExtGraphics(GD_DECODE_CONTEXT* DecodeCtx)
 static GD_ERR
 GD_ReadExtComment(GD_DECODE_CONTEXT* DecodeCtx)
 {
-	GD_IgnoreSubDataBlocks(DecodeCtx);
+	if (!CommentExtRoutines.RegisteredCount)
+	{
+		GD_IgnoreSubDataBlocks(DecodeCtx);
+		return GD_OK;
+	}
+
+	GD_EXT_COMMENT ExData;
+
+	const GD_ERR ErrCode = GD_BlockListBuild(DecodeCtx, &ExData.Blocks);
+
+	if (ErrCode != GD_OK)
+		return ErrCode;
+
+	for (size_t i = 0; i < CommentExtRoutines.RegisteredCount; ++i)
+	{
+		if (CommentExtRoutines.Routines[i] != NULL)
+			((GD_EXT_ROUTINE_COMMENT)CommentExtRoutines.Routines[i])(&ExData);
+	}
+
+	GD_BlockListDestroy(&ExData.Blocks);
 
 	return GD_OK;
 }
@@ -368,8 +450,39 @@ GD_ReadExtension(GD_DECODE_CONTEXT* DecodeCtx)
 		case EXT_LABEL_GRAPHICS: return GD_ReadExtGraphics(DecodeCtx);
 		case EXT_LABEL_COMMENT: return GD_ReadExtComment(DecodeCtx);
 
-		default: return GD_UNEXPECTED_DATA;
+		default:
+			return GD_UNEXPECTED_DATA;
 	}
+}
+
+static GD_ERR
+GD_ReadImage(GD_DECODE_CONTEXT* DecodeCtx)
+{
+	GD_IMAGE_DESCRIPTOR ImageDescriptor;
+
+	//
+	// Read Image Descriptor
+	//
+	ImageDescriptor.PositionLeft = GD_ReadWord(DecodeCtx);
+	ImageDescriptor.PositionTop  = GD_ReadWord(DecodeCtx);
+	ImageDescriptor.Width        = GD_ReadWord(DecodeCtx);
+	ImageDescriptor.Height       = GD_ReadWord(DecodeCtx);
+	ImageDescriptor.PackedFields = GD_ReadByte(DecodeCtx);
+
+	GD_COLOR_TABLE LocalColorTable;
+	LocalColorTable.Count = 0;
+
+	//
+	// Read Local Color Table if present
+	//
+	if (DESCRIPTOR_TABLE_PRESENT(ImageDescriptor.PackedFields))
+		GD_ReadColorTable(DecodeCtx, &LocalColorTable, ImageDescriptor.PackedFields);
+
+	//
+	// TODO: Process Image Data
+	//
+
+	return GD_OK;
 }
 
 GD_ERR
@@ -497,9 +610,29 @@ GD_DecodeInternal(GD_DECODE_CONTEXT* DecodeCtx, GD_ERR* ErrorCode)
 	//
 	// Read the GCT immediately after if bit is set in LOGICAL_SCREEN_DESCRIPTOR.PackedFields
 	//
-	if (LSD_HAS_GCT(Gif->ScreenDesc.PackedFields))
+	if (DESCRIPTOR_TABLE_PRESENT(Gif->ScreenDesc.PackedFields))
+		GD_ReadColorTable(DecodeCtx, &Gif->GlobalColorTable, Gif->ScreenDesc.PackedFields);
+
+	//
+	// Process blocks
+	//
+	BYTE b;
+	while ((b = GD_ReadByte(DecodeCtx)) != TRAILER)
 	{
-		*ErrorCode = GD_ReadGlobalColorTable(DecodeCtx, &Gif->GlobalColorTable, Gif->ScreenDesc.PackedFields);
+		switch (b)
+		{
+			case BLOCK_INTRODUCER_EXT:
+				*ErrorCode = GD_ReadExtension(DecodeCtx);
+				break;
+
+			case BLOCK_INTRODUCER_IMG:
+				*ErrorCode = GD_ReadImage(DecodeCtx);
+				break;
+
+			default:
+				*ErrorCode = GD_UNEXPECTED_DATA;
+				break;
+		}
 
 		if (*ErrorCode != GD_OK)
 		{
@@ -508,28 +641,7 @@ GD_DecodeInternal(GD_DECODE_CONTEXT* DecodeCtx, GD_ERR* ErrorCode)
 		}
 	}
 
-	while (GD_TRUE)
-	{
-		const BYTE b = GD_ReadByte(DecodeCtx);
-
-		switch (b)
-		{
-			case BLOCK_INTRODUCER_EXT:
-				GD_ReadExtension(DecodeCtx);
-				break;
-
-			case BLOCK_INTRODUCER_IMG:
-				break;
-
-			case TRAILER:
-				return Gif;
-
-			default:
-				free(Gif);
-				*ErrorCode = GD_UNEXPECTED_DATA;
-				return NULL;
-		}
-	}
+	return Gif;
 }
 
 GD_GIF_HANDLE
@@ -537,6 +649,7 @@ GD_OpenGif(const char* Path, GD_ERR* ErrorCode, size_t* ErrorBytePos)
 {
 	GD_DECODE_CONTEXT DecodeCtx;
 
+	// TODO: Close file handle
 	*ErrorCode = GD_InitDecodeContextStream(&DecodeCtx, Path);
 
 	if (*ErrorCode != GD_OK)
