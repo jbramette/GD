@@ -1,4 +1,4 @@
-#include "gifdec.h"
+#include "gd.h"
 #include <stdlib.h>
 #include <stdio.h>
 

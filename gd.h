@@ -41,6 +41,7 @@ typedef enum GD_ERR
 	GD_NOMEM,
 	GD_IOFAIL,
 	GD_NOTFOUND,
+	GD_NO_COLOR_TABLE,
 	GD_NOT_ENOUGH_DATA,
 	GD_UNEXPECTED_DATA,
 	GD_INVALID_SIGNATURE,
@@ -290,6 +291,11 @@ GGD_ClearAllExRoutines();
 void
 GD_UnregisterExRoutine(GD_EXTENSION_TYPE RoutineType, void* UserRoutine);
 
+/// \brief Convert a GD_ERR value to its string representation
+/// \param Error
+/// \return
+const char*
+GD_ErrorAsString(GD_ERR Error);
 
 
 
@@ -483,7 +489,15 @@ GD_ReadExtension(GD_DECODE_CONTEXT* DecodeCtx);
 /// \param DecodeCtx
 /// \return
 static GD_ERR
-GD_ReadImage(GD_DECODE_CONTEXT* DecodeCtx);
+GD_ReadImage(GD_DECODE_CONTEXT* DecodeCtx, GD_GIF_HANDLE Gif);
+
+/// \brief
+/// \param DecodeCtx
+/// \param Gif
+/// \param ImageDescriptor
+/// \return
+static GD_ERR
+GD_ProcessImageRaster(GD_DECODE_CONTEXT* DecodeCtx, GD_GIF_HANDLE Gif, GD_IMAGE_DESCRIPTOR* ImageDescriptor, GD_COLOR_TABLE* ActiveTable);
 
 /// \brief The main GIF decoding routine
 /// \param DecodeCtx

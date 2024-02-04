@@ -1,4 +1,4 @@
-#include "gifdec.h"
+#include "gd.h"
 #include <stdlib.h>
 
 
@@ -9,6 +9,11 @@
 
 #define DESCRIPTOR_TABLE_PRESENT(DescriptorFields) ((DescriptorFields) & 0x80)
 #define DESCRIPTOR_TABLE_SIZE(DescriptorFields)    (2 << ((DescriptorFields) && 7))
+
+
+// TODO: 1. Add support for custom extensions
+//       2. Fix integer overflows and possible OOB access
+//       3. Fuzzin' time !
 
 
 static GD_ERR
@@ -170,7 +175,7 @@ GD_ValidateHeader(GD_DECODE_CONTEXT* DecodeCtx, GD_GIF_VERSION* Version)
 		if (Header[i] != (BYTE)Version1Header[i] &&
 		    Header[i] != (BYTE)Version2Header[i])
 		{
-			return GD_UNEXPECTED_DATA;
+			return GD_INVALID_SIGNATURE;
 		}
 	}
 
@@ -456,31 +461,65 @@ GD_ReadExtension(GD_DECODE_CONTEXT* DecodeCtx)
 }
 
 static GD_ERR
-GD_ReadImage(GD_DECODE_CONTEXT* DecodeCtx)
+GD_LzwDecompressRaster(BYTE LzwCodeWidth, GD_DataBlockList* Blocks, GD_COLOR_TABLE* ActiveTable)
+{
+	//
+	// An index could access out of the table
+	//
+	if (LzwCodeWidth > 8)
+		return GD_UNEXPECTED_DATA;
+
+	//
+	// Table would not be fully indexable ? Maybe we should add some kind of "pedantic" flag later
+	//
+	if (ActiveTable->Count > (1 << LzwCodeWidth))
+		return GD_UNEXPECTED_DATA;
+
+
+
+
+	return GD_OK;
+}
+
+static GD_ERR
+GD_ProcessImageRaster(GD_DECODE_CONTEXT* DecodeCtx, GD_GIF_HANDLE Gif, GD_IMAGE_DESCRIPTOR* ImageDescriptor, GD_COLOR_TABLE* ActiveTable)
+{
+	const BYTE LzwCodeWidth = GD_ReadByte(DecodeCtx);
+	GD_DataBlockList Blocks;
+
+	GD_ERR ErrorCode = GD_BlockListBuild(DecodeCtx, &Blocks);
+
+	if (ErrorCode != GD_OK)
+		return ErrorCode;
+
+	return GD_LzwDecompressRaster(LzwCodeWidth, &Blocks, ActiveTable);
+}
+
+static GD_ERR
+GD_ReadImage(GD_DECODE_CONTEXT* DecodeCtx, GD_GIF_HANDLE Gif)
 {
 	GD_IMAGE_DESCRIPTOR ImageDescriptor;
 
-	//
-	// Read Image Descriptor
-	//
 	ImageDescriptor.PositionLeft = GD_ReadWord(DecodeCtx);
 	ImageDescriptor.PositionTop  = GD_ReadWord(DecodeCtx);
 	ImageDescriptor.Width        = GD_ReadWord(DecodeCtx);
 	ImageDescriptor.Height       = GD_ReadWord(DecodeCtx);
 	ImageDescriptor.PackedFields = GD_ReadByte(DecodeCtx);
 
-	GD_COLOR_TABLE LocalColorTable;
-	LocalColorTable.Count = 0;
-
-	//
-	// Read Local Color Table if present
-	//
 	if (DESCRIPTOR_TABLE_PRESENT(ImageDescriptor.PackedFields))
+	{
+		GD_COLOR_TABLE LocalColorTable;
 		GD_ReadColorTable(DecodeCtx, &LocalColorTable, ImageDescriptor.PackedFields);
-
-	//
-	// TODO: Process Image Data
-	//
+		GD_ProcessImageRaster(DecodeCtx, Gif, &ImageDescriptor, &LocalColorTable);
+	}
+	else if (DESCRIPTOR_TABLE_PRESENT(Gif->ScreenDesc.PackedFields))
+	{
+		GD_ProcessImageRaster(DecodeCtx, Gif, &ImageDescriptor, &Gif->GlobalColorTable);
+	}
+	else
+	{
+		return GD_NO_COLOR_TABLE;
+	}
 
 	return GD_OK;
 }
@@ -626,7 +665,7 @@ GD_DecodeInternal(GD_DECODE_CONTEXT* DecodeCtx, GD_ERR* ErrorCode)
 				break;
 
 			case BLOCK_INTRODUCER_IMG:
-				*ErrorCode = GD_ReadImage(DecodeCtx);
+				*ErrorCode = GD_ReadImage(DecodeCtx, Gif);
 				break;
 
 			default:
@@ -686,4 +725,24 @@ GD_FromMemory(const void* Buffer, size_t BufferSize, GD_ERR* ErrorCode, size_t* 
 void GD_CloseGif(GD_GIF_HANDLE Gif)
 {
 	free(Gif);
+}
+
+const char*
+GD_ErrorAsString(GD_ERR Error)
+{
+	switch (Error) {
+		case GD_OK: return "GD_OK";
+		case GD_NOMEM: return "GD_NOMEM";
+		case GD_IOFAIL: return "GD_IOFAIL";
+		case GD_NOTFOUND: return "GD_NOTFOUND";
+		case GD_NO_COLOR_TABLE: return "GD_NO_COLOR_TABLE";
+		case GD_NOT_ENOUGH_DATA: return "GD_NOT_ENOUGH_DATA";
+		case GD_UNEXPECTED_DATA: return "GD_UNEXPECTED_DATA";
+		case GD_INVALID_SIGNATURE: return "GD_INVALID_SIGNATURE";
+		case GD_INVALID_IMG_INDEX: return "GD_INVALID_IMG_INDEX";
+		case GD_MAX_REGISTERED_ROUTINE: return "GD_MAX_REGISTERED_ROUTINE";
+
+		default:
+			return "<unknown error code>";
+	}
 }
