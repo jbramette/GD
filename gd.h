@@ -24,8 +24,9 @@
 ///               GD LIBRARY TYPE DEFINITIONS                  //
 /////////////////////////////////////////////////////////////////
 
-typedef uint8_t  BYTE;
-typedef uint16_t WORD;
+typedef uint8_t  GD_BYTE;
+typedef uint16_t GD_WORD;
+typedef uint32_t GD_DWORD;
 
 
 typedef enum GD_BOOL
@@ -63,8 +64,8 @@ typedef struct GD_DataBlock
 	struct GD_DataBlock* BLink;
 	struct GD_DataBlock* FLink;
 
-	BYTE Data[SUB_BLOCK_MAX_SIZE];
-	BYTE EffectiveSize;
+	GD_BYTE Data[SUB_BLOCK_MAX_SIZE];
+	GD_BYTE EffectiveSize;
 
 } GD_DataBlock;
 
@@ -81,9 +82,9 @@ typedef struct GD_DataBlockList
 
 typedef struct GD_EXT_GRAPHICS
 {
-	BYTE PackedFields;
-	WORD DelayTime;
-	BYTE TransparentColorIndex;
+	GD_BYTE PackedFields;
+	GD_WORD DelayTime;
+	GD_BYTE TransparentColorIndex;
 } GD_EXT_GRAPHICS;
 
 
@@ -95,14 +96,14 @@ typedef struct GD_EXT_COMMENT
 
 typedef struct GD_EXT_PLAINTEXT
 {
-	WORD GridPositionLeft;
-	WORD GridPositionTop;
-	WORD GridWidth;
-	WORD GridHeight;
-	BYTE CharCellWidth;
-	BYTE CharCellHeight;
-	BYTE FgColorIndex;
-	BYTE BgColorIndex;
+	GD_WORD GridPositionLeft;
+	GD_WORD GridPositionTop;
+	GD_WORD GridWidth;
+	GD_WORD GridHeight;
+	GD_BYTE CharCellWidth;
+	GD_BYTE CharCellHeight;
+	GD_BYTE FgColorIndex;
+	GD_BYTE BgColorIndex;
 
 	GD_DataBlockList Blocks;
 
@@ -111,8 +112,8 @@ typedef struct GD_EXT_PLAINTEXT
 
 typedef struct GD_EXT_APPLICATION
 {
-	BYTE AppId[8];
-	BYTE AppAuth[3];
+	GD_BYTE AppId[8];
+	GD_BYTE AppAuth[3];
 
 	GD_DataBlockList Blocks;
 
@@ -125,7 +126,6 @@ typedef enum GD_EXTENSION_TYPE
 	GD_PLAINTEXT   = 1,
 	GD_GRAPHICS    = 2,
 	GD_COMMENT     = 3
-
 } GD_EXTENSION_TYPE;
 
 
@@ -160,29 +160,29 @@ typedef enum GD_GIF_VERSION
 
 typedef struct GD_LOGICAL_SCREEN_DESCRIPTOR
 {
-	WORD LogicalWidth;
-	WORD LogicalHeight;
-	BYTE PackedFields;
-	BYTE BgColorIndex;
-	BYTE PixelAspectRatio;
+	GD_WORD LogicalWidth;
+	GD_WORD LogicalHeight;
+	GD_BYTE PackedFields;
+	GD_BYTE BgColorIndex;
+	GD_BYTE PixelAspectRatio;
 } GD_LOGICAL_SCREEN_DESCRIPTOR;
 
 
 typedef struct GD_IMAGE_DESCRIPTOR
 {
-	WORD PositionLeft;
-	WORD PositionTop;
-	WORD Width;
-	WORD Height;
-	BYTE PackedFields;
+	GD_WORD PositionLeft;
+	GD_WORD PositionTop;
+	GD_WORD Width;
+	GD_WORD Height;
+	GD_BYTE PackedFields;
 } GD_IMAGE_DESCRIPTOR;
 
 
 typedef struct GD_GIF_COLOR
 {
-	BYTE r;
-	BYTE g;
-	BYTE b;
+	GD_BYTE r;
+	GD_BYTE g;
+	GD_BYTE b;
 } GD_GIF_COLOR;
 
 
@@ -267,7 +267,7 @@ GD_ImageCount(GD_GIF_HANDLE Gif);
 /// \param BufferSize
 /// \return
 GD_ERR
-GD_ImageBuffer(GD_GIF_HANDLE Gif, size_t ImageIndex, BYTE** Buffer, size_t* BufferSize);
+GD_ImageBuffer(GD_GIF_HANDLE Gif, size_t ImageIndex, GD_BYTE** Buffer, size_t* BufferSize);
 
 /// \brief Register a routine to be called when the decoder encounters an application, comment or plain text extension
 /// \param RoutineType
@@ -319,12 +319,12 @@ typedef struct GD_DECODE_CONTEXT
 	// File descriptor and buffer used as a chunk when reading from a stream (ie: a file)
 	//
 	FILE*  StreamFd;
-	BYTE   StreamChunk[CHUNK_SIZE];
+	GD_BYTE   StreamChunk[CHUNK_SIZE];
 
 	//
 	// Pointer and size of the buffer used to decode from memory
 	//
-	BYTE*  MemoryBuffer;
+	GD_BYTE*  MemoryBuffer;
 	size_t MemoryBufferSize;
 
 	//
@@ -337,8 +337,8 @@ typedef struct GD_DECODE_CONTEXT
 	//		- StreamChunk  for SourceMode == GD_FROM_STREAM
 	//		- MemoryBuffer for SourceMode == GD_FROM_MEMORY
 	//
-	BYTE* SourceBeg;
-	BYTE* SourceEnd;
+	GD_BYTE* SourceBeg;
+	GD_BYTE* SourceEnd;
 
 	//
 	// Indicates whether the source has reached EOF (buffer entirely read for memory mode)
@@ -354,94 +354,102 @@ typedef struct GD_DECODE_CONTEXT
 
 
 /// \brief Load a new chunk from the input file's stream
-/// \param DecodeCtx
+/// \param Decoder
 static void
-GD_DecoderLoadChunk(GD_DECODE_CONTEXT* DecodeCtx);
+GD_DecoderLoadChunk(GD_DECODE_CONTEXT* Decoder);
 
 /// \brief Initialize the decoding context when reading from a file
-/// \param DecodeCtx
+/// \param Decoder
 /// \param Path
 /// \return
 static GD_ERR
-GD_InitDecodeContextStream(GD_DECODE_CONTEXT* DecodeCtx, const char* Path);
+GD_InitDecodeContextStream(GD_DECODE_CONTEXT* Decoder, const char* Path);
 
 /// \brief Initialize the decoding context when reading from a buffer
-/// \param DecodeCtx
+/// \param Decoder
 /// \param Buffer
 /// \param BufferSize
 /// \return
 static GD_ERR
-GD_InitDecodeContextMemory(GD_DECODE_CONTEXT* DecodeCtx, const void* Buffer, size_t BufferSize);
+GD_InitDecodeContextMemory(GD_DECODE_CONTEXT* Decoder, const void* Buffer, size_t BufferSize);
 
 /// \brief Check whether the decoder can read a byte or has reached end of data-stream
-/// \param DecodeCtx
+/// \param Decoder
 /// \return
 static GD_BOOL
-GD_DecoderCanRead(GD_DECODE_CONTEXT* DecodeCtx);
+GD_DecoderCanRead(GD_DECODE_CONTEXT* Decoder);
 
 /// \brief Read a byte from the data-stream, and advance the reading cursor
-/// \param DecodeCtx
+/// \param Decoder
 /// \return
-static BYTE
-GD_ReadByte(GD_DECODE_CONTEXT* DecodeCtx);
+static GD_BYTE
+GD_ReadByte(GD_DECODE_CONTEXT* Decoder);
 
 /// \brief Read an amount of bytes into a buffer from the data-stream, advance the reading cursor
-/// \param DecodeCtx
+/// \param Decoder
 /// \param Buffer
 /// \param Count
 /// \return
 static size_t
-GD_ReadBytes(GD_DECODE_CONTEXT* DecodeCtx, BYTE* Buffer, size_t Count);
+GD_ReadBytes(GD_DECODE_CONTEXT* Decoder, GD_BYTE* Buffer, size_t Count);
 
 /// \brief Read a two bytes in a little-endian format, advance the reading cursor
-/// \param DecodeCtx
+/// \param Decoder
 /// \return
-static WORD
-GD_ReadWord(GD_DECODE_CONTEXT* DecodeCtx);
+static GD_WORD
+GD_ReadWord(GD_DECODE_CONTEXT* Decoder);
 
 /// \brief Advance the reading cursor into the data-stream from a number of bytes
-/// \param DecodeCtx
+/// \param Decoder
 /// \param BytesCount
 /// \return
 static GD_ERR
-GD_DecoderAdvance(GD_DECODE_CONTEXT* DecodeCtx, size_t BytesCount);
+GD_DecoderAdvance(GD_DECODE_CONTEXT* Decoder, size_t BytesCount);
 
 /// \brief Make sure the GIF header is correct, that means a valid signature and version
-/// \param DecodeCtx
+/// \param Decoder
 /// \param Version
 /// \return
 static GD_ERR
-GD_ValidateHeader(GD_DECODE_CONTEXT* DecodeCtx, GD_GIF_VERSION* Version);
+GD_ValidateHeader(GD_DECODE_CONTEXT* Decoder, GD_GIF_VERSION* Version);
 
 /// \brief Decode a GIF screen descriptor from the data-stream
-/// \param DecodeCtx
+/// \param Decoder
 /// \param ScrDescriptor
 /// \return
 static GD_ERR
-GD_ReadScreenDescriptor(GD_DECODE_CONTEXT* DecodeCtx, GD_LOGICAL_SCREEN_DESCRIPTOR* ScrDescriptor);
+GD_ReadScreenDescriptor(GD_DECODE_CONTEXT* Decoder, GD_LOGICAL_SCREEN_DESCRIPTOR* ScrDescriptor);
 
 /// \brief Decode a gif global color table from the data-stream
-/// \param DecodeCtx
+/// \param Decoder
 /// \param Table
 /// \param ScrDescriptorFields
 /// \return
 static GD_ERR
-GD_ReadColorTable(GD_DECODE_CONTEXT* DecodeCtx, GD_COLOR_TABLE* Table, BYTE ScrDescriptorFields);
+GD_ReadColorTable(GD_DECODE_CONTEXT* Decoder, GD_COLOR_TABLE* Table, GD_BYTE ScrDescriptorFields);
 
 /// \brief Ignore gif data sub-blocks
-/// \param DecodeCtx
+/// \param Decoder
 static void
-GD_IgnoreSubDataBlocks(GD_DECODE_CONTEXT* DecodeCtx);
+GD_IgnoreSubDataBlocks(GD_DECODE_CONTEXT* Decoder);
+
+/// \brief Same as BlockListBuild but creates a linear buffer instead of a linked list
+/// \param Decoder
+/// \param Buffer
+/// \param BufferSize
+/// \return
+static GD_ERR
+GD_BlocksToLinearBuffer(GD_DECODE_CONTEXT* Decoder, GD_BYTE** Buffer, GD_DWORD* BufferSize);
 
 static GD_ERR
-GD_CreateBlock(GD_DECODE_CONTEXT* DecodeCtx, BYTE BSize, GD_DataBlock** OutputBlock);
+GD_CreateBlock(GD_DECODE_CONTEXT* Decoder, GD_BYTE BSize, GD_DataBlock** OutputBlock);
 
 /// \brief Create a doubly linked list of sub data blocks
-/// \param DecodeCtx
+/// \param Decoder
 /// \param List
 /// \return
 static GD_ERR
-GD_BlockListBuild(GD_DECODE_CONTEXT* DecodeCtx, GD_DataBlockList* List);
+GD_BlockListBuild(GD_DECODE_CONTEXT* Decoder, GD_DataBlockList* List);
 
 /// \brief De-allocates a block list allocated by \ref GD_BlockListBuild
 /// \param List
@@ -454,57 +462,58 @@ GD_BlockListDestroy(GD_DataBlockList* List);
 static void
 GD_BlockListAppend(GD_DataBlockList* List, GD_DataBlock* Block);
 
-/// \brief
-/// \param DecodeCtx
-/// \return
-static GD_ERR
-GD_ReadExtPlainText(GD_DECODE_CONTEXT* DecodeCtx);
 
 /// \brief
-/// \param DecodeCtx
+/// \param Decoder
 /// \return
 static GD_ERR
-GD_ReadExtGraphics(GD_DECODE_CONTEXT* DecodeCtx);
+GD_ReadExtPlainText(GD_DECODE_CONTEXT* Decoder);
 
 /// \brief
-/// \param DecodeCtx
+/// \param Decoder
 /// \return
 static GD_ERR
-GD_ReadExtComment(GD_DECODE_CONTEXT* DecodeCtx);
+GD_ReadExtGraphics(GD_DECODE_CONTEXT* Decoder);
 
 /// \brief
-/// \param DecodeCtx
+/// \param Decoder
 /// \return
 static GD_ERR
-GD_ReadExtApplication(GD_DECODE_CONTEXT* DecodeCtx);
+GD_ReadExtComment(GD_DECODE_CONTEXT* Decoder);
 
 /// \brief
-/// \param DecodeCtx
+/// \param Decoder
+/// \return
+static GD_ERR
+GD_ReadExtApplication(GD_DECODE_CONTEXT* Decoder);
+
+/// \brief
+/// \param Decoder
 /// \param Gif
 /// \return
 static GD_ERR
-GD_ReadExtension(GD_DECODE_CONTEXT* DecodeCtx);
+GD_ReadExtension(GD_DECODE_CONTEXT* Decoder);
 
 /// \brief
-/// \param DecodeCtx
+/// \param Decoder
 /// \return
 static GD_ERR
-GD_ReadImage(GD_DECODE_CONTEXT* DecodeCtx, GD_GIF_HANDLE Gif);
+GD_ReadImage(GD_DECODE_CONTEXT* Decoder, GD_GIF_HANDLE Gif);
 
 /// \brief
-/// \param DecodeCtx
+/// \param Decoder
 /// \param Gif
 /// \param ImageDescriptor
 /// \return
 static GD_ERR
-GD_ProcessImageRaster(GD_DECODE_CONTEXT* DecodeCtx, GD_GIF_HANDLE Gif, GD_IMAGE_DESCRIPTOR* ImageDescriptor, GD_COLOR_TABLE* ActiveTable);
+GD_ProcessImageRaster(GD_DECODE_CONTEXT* Decoder, GD_GIF_HANDLE Gif, GD_IMAGE_DESCRIPTOR* ImageDescriptor, GD_COLOR_TABLE* ActiveTable);
 
 /// \brief The main GIF decoding routine
-/// \param DecodeCtx
+/// \param Decoder
 /// \param ErrorCode
 /// \return
 static GD_GIF_HANDLE
-GD_DecodeInternal(GD_DECODE_CONTEXT* DecodeCtx, GD_ERR* ErrorCode);
+GD_DecodeInternal(GD_DECODE_CONTEXT* Decoder, GD_ERR* ErrorCode);
 
 
 
