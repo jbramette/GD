@@ -174,6 +174,25 @@ OnAppExt(GD_EXT_APPLICATION* ExData)
 	DumpDataBlocks(&ExData->Blocks);
 }
 
+void SaveFrame(const char* PpmPath, const GD_FRAME* Frame)
+{
+	FILE* h = fopen(PpmPath, "w");
+
+	if (h == NULL)
+		return;
+
+	fputs("P3\n", h);
+	fprintf(h, "%d %d\n", Frame->Descriptor.Width, Frame->Descriptor.Height);
+	fprintf(h, "255\n");
+
+	for (size_t index = 0; index < Frame->Descriptor.Width * Frame->Descriptor.Height; ++index)
+	{
+		GD_GIF_COLOR* c = &Frame->Buffer[index];
+		fprintf(h, "%d %d %d\n", c->r, c->g, c->b);
+	}
+
+	fclose(h);
+}
 
 int main(int argc, const char** argv)
 {
@@ -187,10 +206,16 @@ int main(int argc, const char** argv)
 
 	GD_GIF_HANDLE Gif = GD_OpenGif("testgif89a.gif", &ErrCode, &ErrorBytePos);
 
-	if (ErrCode != GD_OK)
+	for (GD_DWORD FrameIndex = 0; FrameIndex < GD_FrameCount(Gif); ++FrameIndex)
 	{
-		fprintf(stderr, "[GD]: Decoding error code=%d (%s), pos=%zu\n", ErrCode, GD_ErrorAsString(ErrCode), ErrorBytePos);
-		return EXIT_FAILURE;
+		printf("Frame %d/%d\n", FrameIndex, GD_FrameCount(Gif));
+		GD_FRAME* Frame = GD_GetFrame(Gif, FrameIndex);
+
+		char Path[256];
+
+		snprintf(Path, 256, "frame_%d.ppm", FrameIndex);
+
+		SaveFrame(Path, Frame);
 	}
 
 	GD_CloseGif(Gif);

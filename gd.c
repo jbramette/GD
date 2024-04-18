@@ -1,5 +1,6 @@
 #include "gd.h"
 #include <stdlib.h>
+#include <string.h>
 
 
 #define SIGNATURE_SIZE 3
@@ -7,19 +8,98 @@
 #define HEADER_SIZE (SIGNATURE_SIZE + VERSION_SIZE)
 
 
-#define DESCRIPTOR_TABLE_PRESENT(DescriptorFields) ((DescriptorFields) & 0x80)
-#define DESCRIPTOR_TABLE_SIZE(DescriptorFields)    (2 << ((DescriptorFields) & 7))
+#define MASK_TABLE_PRESENT 0x80
+#define DESCRIPTOR_TABLE_SIZE(DescriptorFields) (2 << ((DescriptorFields) & 7))
 
 
 #define LZW_MAX_CODEWIDTH 12
 #define LZW_INVALID_CODE 0xFFFF
 
 
-// TODO: 1. Add support for custom extensions
-//       2. Fix integer overflows and possible OOB access
-//       3. Fuzzin' time !
+typedef struct GD_EXT_ROUTINES
+{
+	void* Routines[MAX_REGISTERED_ROUTINES];
+	size_t RegisteredCount;
+} GD_EXT_ROUTINES;
 
 
+GD_EXT_ROUTINES ApplicationExtRoutines;
+GD_EXT_ROUTINES PlaintextExtRoutines;
+GD_EXT_ROUTINES GraphicsExtRoutines;
+GD_EXT_ROUTINES CommentExtRoutines;
+
+
+typedef enum GD_SOURCE_MODE
+{
+	GD_FROM_STREAM,
+	GD_FROM_MEMORY
+} GD_SOURCE_MODE;
+
+
+#define CHUNK_SIZE 1024
+
+
+typedef struct GD_DECODE_CONTEXT
+{
+	//
+	// File descriptor and buffer used as a chunk when reading from a stream (ie: a file)
+	//
+	FILE*  StreamFd;
+	GD_BYTE   StreamChunk[CHUNK_SIZE];
+
+	//
+	// Pointer and size of the buffer used to decode from memory
+	//
+	GD_BYTE*  MemoryBuffer;
+	size_t MemoryBufferSize;
+
+	//
+	// Indicates whether the decoder use a stream or a buffer as a source input
+	//
+	GD_SOURCE_MODE SourceMode;
+
+	//
+	// Iterators on the source input, depending on the mode they can point to:
+	//		- StreamChunk  for SourceMode == GD_FROM_STREAM
+	//		- MemoryBuffer for SourceMode == GD_FROM_MEMORY
+	//
+	GD_BYTE* SourceBeg;
+	GD_BYTE* SourceEnd;
+
+	//
+	// Indicates whether the source has reached EOF (buffer entirely read for memory mode)
+	//
+	GD_BOOL SourceEOF;
+
+	//
+	// Current position of the decoder in the data stream, useful for errors
+	//
+	size_t DataStreamOffset;
+
+} GD_DECODE_CONTEXT;
+
+
+typedef struct GD_GIF
+{
+	GD_GIF_VERSION Version;
+	GD_LOGICAL_SCREEN_DESCRIPTOR ScreenDesc;
+	GD_COLOR_TABLE PaletteGlobal;
+	GD_COLOR_TABLE PaletteLocal;
+	GD_COLOR_TABLE* ActivePalette;
+	GD_FRAME* Frames;
+	GD_DWORD FrameCount;
+
+} GD_GIF, *GD_GIF_HANDLE;
+
+
+static void
+GD_DecoderLoadChunk(GD_DECODE_CONTEXT* Decoder)
+{
+	const size_t BytesRead = fread(Decoder->StreamChunk, 1, CHUNK_SIZE, Decoder->StreamFd);
+
+	Decoder->SourceBeg = Decoder->StreamChunk;
+	Decoder->SourceEnd = Decoder->SourceBeg + BytesRead;
+}
 
 static GD_ERR
 GD_InitDecodeContextStream(GD_DECODE_CONTEXT* Decoder, const char* Path)
@@ -64,15 +144,6 @@ GD_InitDecodeContextMemory(GD_DECODE_CONTEXT* Decoder, const void* Buffer, size_
 	return GD_OK;
 }
 
-static void
-GD_DecoderLoadChunk(GD_DECODE_CONTEXT* Decoder)
-{
-	const size_t BytesRead = fread(Decoder->StreamChunk, 1, CHUNK_SIZE, Decoder->StreamFd);
-
-	Decoder->SourceBeg = Decoder->StreamChunk;
-	Decoder->SourceEnd = Decoder->SourceBeg + BytesRead;
-}
-
 static GD_BOOL
 GD_DecoderCanRead(GD_DECODE_CONTEXT* Decoder)
 {
@@ -107,18 +178,18 @@ GD_ReadByte(GD_DECODE_CONTEXT* Decoder)
 	return 0;
 }
 
-static size_t
+size_t
 GD_ReadBytes(GD_DECODE_CONTEXT* Decoder, GD_BYTE* Buffer, size_t Count)
 {
-	size_t i;
+	size_t read;
 
-	for (i = 0; i < Count && !Decoder->SourceEOF; ++i)
-		Buffer[i] = GD_ReadByte(Decoder);
+	for (read = 0; read < Count && !Decoder->SourceEOF; ++read)
+		Buffer[read] = GD_ReadByte(Decoder);
 
-	return i;
+	return read;
 }
 
-static GD_WORD
+GD_WORD
 GD_ReadWord(GD_DECODE_CONTEXT* Decoder)
 {
 	GD_BYTE HiByte = GD_ReadByte(Decoder);
@@ -130,7 +201,7 @@ GD_ReadWord(GD_DECODE_CONTEXT* Decoder)
 	return HiByte | (LoByte << 8);
 }
 
-static GD_ERR
+GD_ERR
 GD_DecoderAdvance(GD_DECODE_CONTEXT* Decoder, size_t BytesCount)
 {
 	if (Decoder->SourceMode == GD_FROM_MEMORY)
@@ -156,7 +227,7 @@ GD_DecoderAdvance(GD_DECODE_CONTEXT* Decoder, size_t BytesCount)
 	return GD_OK;
 }
 
-static GD_ERR
+GD_ERR
 GD_ValidateHeader(GD_DECODE_CONTEXT* Decoder, GD_GIF_VERSION* Version)
 {
 	GD_BYTE Header[HEADER_SIZE];
@@ -190,7 +261,7 @@ GD_ValidateHeader(GD_DECODE_CONTEXT* Decoder, GD_GIF_VERSION* Version)
 }
 
 
-static GD_ERR
+void
 GD_ReadScreenDescriptor(GD_DECODE_CONTEXT* Decoder, GD_LOGICAL_SCREEN_DESCRIPTOR* ScrDescriptor)
 {
 	ScrDescriptor->LogicalWidth     = GD_ReadWord(Decoder);
@@ -198,11 +269,9 @@ GD_ReadScreenDescriptor(GD_DECODE_CONTEXT* Decoder, GD_LOGICAL_SCREEN_DESCRIPTOR
 	ScrDescriptor->PackedFields     = GD_ReadByte(Decoder);
 	ScrDescriptor->BgColorIndex     = GD_ReadByte(Decoder);
 	ScrDescriptor->PixelAspectRatio = GD_ReadByte(Decoder);
-
-	return GD_OK;
 }
 
-static GD_ERR
+void
 GD_ReadColorTable(GD_DECODE_CONTEXT* Decoder, GD_COLOR_TABLE* Table, GD_BYTE ScrDescriptorFields)
 {
 	Table->Count = DESCRIPTOR_TABLE_SIZE(ScrDescriptorFields);
@@ -213,11 +282,9 @@ GD_ReadColorTable(GD_DECODE_CONTEXT* Decoder, GD_COLOR_TABLE* Table, GD_BYTE Scr
 		Table->Internal[i].g = GD_ReadByte(Decoder);
 		Table->Internal[i].b = GD_ReadByte(Decoder);
 	}
-
-	return GD_OK;
 }
 
-static void
+void
 GD_IgnoreSubDataBlocks(GD_DECODE_CONTEXT* Decoder)
 {
 	for (GD_BYTE BSize = GD_ReadByte(Decoder);
@@ -229,7 +296,7 @@ GD_IgnoreSubDataBlocks(GD_DECODE_CONTEXT* Decoder)
 	}
 }
 
-static GD_ERR
+GD_ERR
 GD_BlocksToLinearBuffer(GD_DECODE_CONTEXT* Decoder, GD_BYTE** Buffer, GD_DWORD* BufferSize)
 {
 	*Buffer = NULL;
@@ -269,7 +336,7 @@ GD_BlocksToLinearBuffer(GD_DECODE_CONTEXT* Decoder, GD_BYTE** Buffer, GD_DWORD* 
 	return GD_OK;
 }
 
-static GD_ERR
+GD_ERR
 GD_CreateBlock(GD_DECODE_CONTEXT* Decoder, GD_BYTE BSize, GD_DataBlock** OutputBlock)
 {
 	GD_DataBlock* Block = malloc(sizeof(GD_DataBlock));
@@ -289,7 +356,29 @@ GD_CreateBlock(GD_DECODE_CONTEXT* Decoder, GD_BYTE BSize, GD_DataBlock** OutputB
 	return GD_OK;
 }
 
-static GD_ERR
+void
+GD_BlockListAppend(GD_DataBlockList* List, GD_DataBlock* Block)
+{
+	if (!List->BlockCount)
+	{
+		Block->BLink = NULL;
+		Block->FLink = NULL;
+
+		List->Head = Block;
+		List->Tail = Block;
+	}
+	else
+	{
+		Block->FLink = NULL;
+		Block->BLink = List->Tail;
+		List->Tail->FLink = Block;
+		List->Tail = Block;
+	}
+
+	++List->BlockCount;
+}
+
+GD_ERR
 GD_BlockListBuild(GD_DECODE_CONTEXT* Decoder, GD_DataBlockList* List)
 {
 	if (!Decoder || !List)
@@ -316,7 +405,7 @@ GD_BlockListBuild(GD_DECODE_CONTEXT* Decoder, GD_DataBlockList* List)
 	return GD_OK;
 }
 
-static void
+void
 GD_BlockListDestroy(GD_DataBlockList* List)
 {
 	if (!List)
@@ -333,29 +422,7 @@ GD_BlockListDestroy(GD_DataBlockList* List)
 	}
 }
 
-static void
-GD_BlockListAppend(GD_DataBlockList* List, GD_DataBlock* Block)
-{
-	if (!List->BlockCount)
-	{
-		Block->BLink = NULL;
-		Block->FLink = NULL;
-
-		List->Head = Block;
-		List->Tail = Block;
-	}
-	else
-	{
-		Block->FLink = NULL;
-		Block->BLink = List->Tail;
-		List->Tail->FLink = Block;
-		List->Tail = Block;
-	}
-
-	++List->BlockCount;
-}
-
-static GD_ERR
+GD_ERR
 GD_ReadExtApplication(GD_DECODE_CONTEXT* Decoder)
 {
 	if (!ApplicationExtRoutines.RegisteredCount)
@@ -394,7 +461,7 @@ GD_ReadExtApplication(GD_DECODE_CONTEXT* Decoder)
 	return GD_OK;
 }
 
-static GD_ERR
+GD_ERR
 GD_ReadExtPlainText(GD_DECODE_CONTEXT* Decoder)
 {
 	if (!PlaintextExtRoutines.RegisteredCount)
@@ -433,7 +500,7 @@ GD_ReadExtPlainText(GD_DECODE_CONTEXT* Decoder)
 	return GD_OK;
 }
 
-static GD_ERR
+GD_ERR
 GD_ReadExtGraphics(GD_DECODE_CONTEXT* Decoder)
 {
 	if (!GraphicsExtRoutines.RegisteredCount)
@@ -463,7 +530,7 @@ GD_ReadExtGraphics(GD_DECODE_CONTEXT* Decoder)
 	return GD_OK;
 }
 
-static GD_ERR
+GD_ERR
 GD_ReadExtComment(GD_DECODE_CONTEXT* Decoder)
 {
 	if (!CommentExtRoutines.RegisteredCount)
@@ -490,7 +557,7 @@ GD_ReadExtComment(GD_DECODE_CONTEXT* Decoder)
 	return GD_OK;
 }
 
-static GD_ERR
+GD_ERR
 GD_ReadExtension(GD_DECODE_CONTEXT* Decoder)
 {
 	switch (GD_ReadByte(Decoder))
@@ -523,7 +590,7 @@ typedef struct LZW_CONTEXT
 } LZW_CONTEXT;
 
 
-static GD_WORD
+GD_WORD
 GD_LzwUnpackCode(GD_BYTE LzwCodeWidth, GD_BYTE** CompressedData, GD_DWORD* CompressedDataLength, GD_WORD* Mask)
 {
 	///
@@ -564,7 +631,7 @@ GD_LzwUnpackCode(GD_BYTE LzwCodeWidth, GD_BYTE** CompressedData, GD_DWORD* Compr
 	return Code;
 }
 
-static void
+void
 GD_LzwInitContext(LZW_CONTEXT* Lzw, GD_BYTE CodeWidth)
 {
 	Lzw->CodeWidth = CodeWidth;
@@ -583,18 +650,18 @@ GD_LzwInitContext(LZW_CONTEXT* Lzw, GD_BYTE CodeWidth)
 	Lzw->DictIndex += 2;
 }
 
-static GD_ERR
-GD_LzwDecompressRaster(GD_BYTE InitialCodeWidth,
-					   GD_BYTE* CompressedData,
-					   GD_DWORD CompressedDataLength,
-					   GD_BYTE* DecompressedData)
+GD_ERR
+GD_LzwDecompressIndexStream(GD_BYTE InitialCodeWidth,
+							GD_BYTE* CompressedData,
+							GD_DWORD CompressedDataLength,
+							GD_BYTE* IndexStream)
 {
 	if (InitialCodeWidth > LZW_MAX_CODEWIDTH)
 		return GD_UNEXPECTED_DATA;
 
 	LZW_CONTEXT Lzw;
 
-	// Normally GIF should have a clear code at the start of the raster but let's make sure anyway
+	// Normally GIFs should have a clear code at the start of the raster but let's make sure anyway
 	GD_LzwInitContext(&Lzw, InitialCodeWidth);
 
 	GD_WORD PrevCode = LZW_INVALID_CODE;
@@ -641,7 +708,7 @@ GD_LzwDecompressRaster(GD_BYTE InitialCodeWidth,
 		{
 			const LZW_TABLE_ENTRY* Entry = &Lzw.Dictionary[Code];
 
-			DecompressedData[Entry->Length - 1] = Entry->Suffix;
+			IndexStream[Entry->Length - 1] = Entry->Suffix;
 
 			// Prevent infinite loop
 			if (Entry->Prefix == Code)
@@ -650,14 +717,50 @@ GD_LzwDecompressRaster(GD_BYTE InitialCodeWidth,
 			Code = Entry->Prefix;
 		}
 
-		DecompressedData += Copied;
+		IndexStream += Copied;
 	}
 
 	return GD_OK;
 }
 
-static GD_ERR
-GD_ProcessImageRaster(GD_DECODE_CONTEXT* Decoder, GD_GIF_HANDLE Gif, GD_IMAGE_DESCRIPTOR* ImageDescriptor, GD_COLOR_TABLE* ActiveTable)
+GD_ERR
+GD_AppendFrame(GD_GIF_HANDLE Gif, GD_IMAGE_DESCRIPTOR* ImageDescriptor, GD_BYTE* IndexStream)
+{
+	if (Gif->FrameCount > 0)
+	{
+		GD_FRAME* Tmp = (GD_FRAME*)realloc(Gif->Frames, (Gif->FrameCount + 1) * sizeof(GD_FRAME));
+
+		if (!Tmp)
+			return GD_NOMEM;
+
+		Gif->Frames = Tmp;
+	}
+	else
+	{
+		Gif->Frames = (GD_FRAME*)malloc(sizeof(GD_FRAME));
+
+		if (!Gif->Frames)
+			return GD_NOMEM;
+	}
+
+	GD_FRAME* Back = &Gif->Frames[Gif->FrameCount];
+	++Gif->FrameCount;
+
+	memcpy(&Back->Descriptor, ImageDescriptor, sizeof(GD_IMAGE_DESCRIPTOR));
+
+	Back->Buffer = malloc(sizeof(GD_GIF_COLOR) * ImageDescriptor->Width * ImageDescriptor->Height);
+
+	if (!Back->Buffer)
+		return GD_NOMEM;
+
+	for (size_t i = 0; i < ImageDescriptor->Height * ImageDescriptor->Width; ++i)
+		Back->Buffer[i] = Gif->ActivePalette->Internal[IndexStream[i]];
+
+	return GD_OK;
+}
+
+GD_ERR
+GD_ProcessImageRaster(GD_DECODE_CONTEXT* Decoder, GD_GIF_HANDLE Gif, GD_IMAGE_DESCRIPTOR* ImageDescriptor)
 {
 	const GD_BYTE LzwCodeWidth = GD_ReadByte(Decoder);
 
@@ -671,15 +774,24 @@ GD_ProcessImageRaster(GD_DECODE_CONTEXT* Decoder, GD_GIF_HANDLE Gif, GD_IMAGE_DE
 	const GD_DWORD DecompressedDataLength = ImageDescriptor->Height * ImageDescriptor->Width;
 	GD_BYTE* DecompressedData = malloc(sizeof(GD_BYTE) * DecompressedDataLength);
 
-	ErrorCode = GD_LzwDecompressRaster(LzwCodeWidth, CompressedData, CompressedDataLength, DecompressedData);
+	ErrorCode = GD_LzwDecompressIndexStream(LzwCodeWidth, CompressedData, CompressedDataLength, DecompressedData);
 
 	free(CompressedData);
+
+	if (!GD_SUCCESS(ErrorCode))
+	{
+		free(DecompressedData);
+		return ErrorCode;
+	}
+
+	ErrorCode = GD_AppendFrame(Gif, ImageDescriptor, DecompressedData);
+
 	free(DecompressedData);
 
 	return ErrorCode;
 }
 
-static GD_ERR
+GD_ERR
 GD_ReadImage(GD_DECODE_CONTEXT* Decoder, GD_GIF_HANDLE Gif)
 {
 	GD_IMAGE_DESCRIPTOR ImageDescriptor;
@@ -690,22 +802,24 @@ GD_ReadImage(GD_DECODE_CONTEXT* Decoder, GD_GIF_HANDLE Gif)
 	ImageDescriptor.Height       = GD_ReadWord(Decoder);
 	ImageDescriptor.PackedFields = GD_ReadByte(Decoder);
 
-	if (DESCRIPTOR_TABLE_PRESENT(ImageDescriptor.PackedFields))
-	{
-		GD_COLOR_TABLE LocalColorTable;
-		GD_ReadColorTable(Decoder, &LocalColorTable, ImageDescriptor.PackedFields);
-		GD_ProcessImageRaster(Decoder, Gif, &ImageDescriptor, &LocalColorTable);
-	}
-	else if (DESCRIPTOR_TABLE_PRESENT(Gif->ScreenDesc.PackedFields))
-	{
-		GD_ProcessImageRaster(Decoder, Gif, &ImageDescriptor, &Gif->GlobalColorTable);
-	}
-	else
-	{
-		return GD_NO_COLOR_TABLE;
-	}
+	if ((ImageDescriptor.PositionLeft + ImageDescriptor.Width > Gif->ScreenDesc.LogicalWidth) ||
+		(ImageDescriptor.PositionTop + ImageDescriptor.Height > Gif->ScreenDesc.LogicalHeight))
+		return GD_UNEXPECTED_DATA;
 
-	return GD_OK;
+	Gif->ActivePalette = NULL;
+
+	if (ImageDescriptor.PackedFields & MASK_TABLE_PRESENT)
+	{
+		GD_ReadColorTable(Decoder, &Gif->PaletteLocal, ImageDescriptor.PackedFields);
+		Gif->ActivePalette = &Gif->PaletteLocal;
+	}
+	else if (Gif->ScreenDesc.PackedFields & MASK_TABLE_PRESENT)
+		Gif->ActivePalette = &Gif->PaletteGlobal;
+
+	if (!Gif->ActivePalette)
+		return GD_NO_COLOR_TABLE;
+
+	return GD_ProcessImageRaster(Decoder, Gif, &ImageDescriptor);
 }
 
 GD_ERR
@@ -794,7 +908,7 @@ GD_UnregisterExRoutine(GD_EXTENSION_TYPE RoutineType, void* UserRoutine)
 	}
 }
 
-static GD_GIF_HANDLE
+GD_GIF_HANDLE
 GD_DecodeInternal(GD_DECODE_CONTEXT* Decoder, GD_ERR* ErrorCode)
 {
 	//
@@ -807,6 +921,10 @@ GD_DecodeInternal(GD_DECODE_CONTEXT* Decoder, GD_ERR* ErrorCode)
 		*ErrorCode = GD_NOMEM;
 		return NULL;
 	}
+
+	Gif->Frames = NULL;
+	Gif->FrameCount = 0;
+	Gif->ActivePalette = NULL;
 
 	//
 	// Verify header's signature and version
@@ -822,19 +940,13 @@ GD_DecodeInternal(GD_DECODE_CONTEXT* Decoder, GD_ERR* ErrorCode)
 	//
 	// Read Logical Screen Descriptor
 	//
-	*ErrorCode = GD_ReadScreenDescriptor(Decoder, &Gif->ScreenDesc);
-
-	if (*ErrorCode != GD_OK)
-	{
-		free(Gif);
-		return NULL;
-	}
+	GD_ReadScreenDescriptor(Decoder, &Gif->ScreenDesc);
 
 	//
 	// Read the GCT immediately after if bit is set in LOGICAL_SCREEN_DESCRIPTOR.PackedFields
 	//
-	if (DESCRIPTOR_TABLE_PRESENT(Gif->ScreenDesc.PackedFields))
-		GD_ReadColorTable(Decoder, &Gif->GlobalColorTable, Gif->ScreenDesc.PackedFields);
+	if (Gif->ScreenDesc.PackedFields & MASK_TABLE_PRESENT)
+		GD_ReadColorTable(Decoder, &Gif->PaletteGlobal, Gif->ScreenDesc.PackedFields);
 
 	//
 	// Process blocks
@@ -872,7 +984,6 @@ GD_OpenGif(const char* Path, GD_ERR* ErrorCode, size_t* ErrorBytePos)
 {
 	GD_DECODE_CONTEXT Decoder;
 
-	// TODO: Close file handle
 	*ErrorCode = GD_InitDecodeContextStream(&Decoder, Path);
 
 	if (*ErrorCode != GD_OK)
@@ -906,9 +1017,33 @@ GD_FromMemory(const void* Buffer, size_t BufferSize, GD_ERR* ErrorCode, size_t* 
 	return Gif;
 }
 
-void GD_CloseGif(GD_GIF_HANDLE Gif)
+void
+GD_CloseGif(GD_GIF_HANDLE Gif)
 {
+	for (GD_DWORD FrameIndex = 0; FrameIndex < Gif->FrameCount; ++FrameIndex)
+	{
+		GD_FRAME* Current = &Gif->Frames[FrameIndex];
+		free(Current->Buffer);
+	}
+
+	free(Gif->Frames);
+
 	free(Gif);
+}
+
+GD_DWORD
+GD_FrameCount(GD_GIF_HANDLE Gif)
+{
+	return Gif->FrameCount;
+}
+
+GD_FRAME*
+GD_GetFrame(GD_GIF_HANDLE Gif, GD_DWORD FrameIndex)
+{
+	if (!Gif || FrameIndex >= Gif->FrameCount)
+		return NULL;
+
+	return &Gif->Frames[FrameIndex];
 }
 
 const char*
